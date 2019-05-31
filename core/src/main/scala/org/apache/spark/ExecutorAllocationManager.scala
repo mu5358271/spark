@@ -218,7 +218,8 @@ private[spark] class ExecutorAllocationManager(
     }
     // Require external shuffle service for dynamic allocation
     // Otherwise, we may lose shuffle files when killing executors
-    if (!conf.get(config.SHUFFLE_SERVICE_ENABLED) && !testing) {
+    if (!conf.get(config.SHUFFLE_SERVICE_ENABLED) &&
+      !conf.getBoolean("spark.shuffle.s3.enabled", false) && !testing) {
       throw new SparkException("Dynamic allocation of executors requires the external " +
         "shuffle service. You may enable this through spark.shuffle.service.enabled.")
     }

@@ -623,7 +623,7 @@
       <dependency>
         <groupId>io.netty</groupId>
         <artifactId>netty-all</artifactId>
-        <version>4.1.30.Final</version>
+        <version>4.1.31.Final</version>
       </dependency>
       <dependency>
         <groupId>io.netty</groupId>
@@ -2847,6 +2847,13 @@
       <id>mesos</id>
       <modules>
         <module>resource-managers/mesos</module>
+      </modules>
+    </profile>
+
+    <profile>
+      <id>fargate</id>
+      <modules>
+        <module>resource-managers/fargate/core</module>
       </modules>
     </profile>
 

@@ -195,6 +195,12 @@ if [ -d "$SPARK_HOME"/resource-managers/kubernetes/core/target/ ]; then
   cp -a "$SPARK_HOME"/resource-managers/kubernetes/integration-tests/tests "$DISTDIR/kubernetes/"
 fi
 
+# Only create and copy the dockerfiles directory if the fargate artifacts were built.
+if [ -d "$SPARK_HOME"/resource-managers/fargate/core/target/ ]; then
+  mkdir -p "$DISTDIR/fargate/"
+  cp -a "$SPARK_HOME"/resource-managers/fargate/docker/src/main/dockerfiles "$DISTDIR/fargate/"
+fi
+
 # Copy examples and dependencies
 mkdir -p "$DISTDIR/examples/jars"
 cp "$SPARK_HOME"/examples/target/scala*/jars/* "$DISTDIR/examples/jars"

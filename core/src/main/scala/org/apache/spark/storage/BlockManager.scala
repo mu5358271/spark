@@ -24,6 +24,7 @@ import java.nio.channels.Channels
 import java.util.Collections
 import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
 
+import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.HashMap
 import scala.concurrent.{ExecutionContext, Future}
@@ -32,8 +33,11 @@ import scala.reflect.ClassTag
 import scala.util.Random
 import scala.util.control.NonFatal
 
+import com.amazonaws.services.s3.AmazonS3ClientBuilder
+import com.amazonaws.services.s3.model.{DeleteObjectsRequest, ListObjectsV2Request}
 import com.codahale.metrics.{MetricRegistry, MetricSet}
 import org.apache.commons.io.IOUtils
+import org.apache.hadoop.fs.Path
 
 import org.apache.spark._
 import org.apache.spark.executor.DataReadMethod
@@ -447,6 +451,28 @@ private[spark] class BlockManager(
       registerWithExternalShuffleServer()
     }
 
+    if (conf.getBoolean("spark.shuffle.s3.enabled", false) &&
+      blockManagerId.isDriver) {
+      ShutdownHookManager.addShutdownHook(() => {
+        val s3 = AmazonS3ClientBuilder.defaultClient()
+        val bucket = conf.get("spark.shuffle.s3.bucket")
+        val parent = conf.get("spark.shuffle.s3.prefix", ".sparkStaging") +
+          Path.SEPARATOR + conf.get("spark.app.id") + Path.SEPARATOR + "shuffle"
+        val req = new ListObjectsV2Request().withBucketName(bucket).withPrefix(parent)
+        var more = true
+        do {
+          val res = s3.listObjectsV2(req)
+          if (res.getKeyCount > 0) {
+            s3.deleteObjects(
+              new DeleteObjectsRequest(bucket).
+                withKeys(res.getObjectSummaries.asScala.map(_.getKey): _*)
+            )
+          }
+          more = res.isTruncated
+          req.setContinuationToken(res.getNextContinuationToken)
+        } while (more)
+      })
+    }
     logInfo(s"Initialized BlockManager: $blockManagerId")
   }
 

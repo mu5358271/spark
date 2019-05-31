@@ -17,10 +17,17 @@
 
 package org.apache.spark.shuffle
 
+import java.io.DataInputStream
+
+import com.amazonaws.services.s3.AmazonS3ClientBuilder
+import com.amazonaws.services.s3.model.GetObjectRequest
+import org.apache.hadoop.fs.Path
+
 import org.apache.spark._
 import org.apache.spark.internal.{config, Logging}
 import org.apache.spark.serializer.SerializerManager
-import org.apache.spark.storage.{BlockManager, ShuffleBlockFetcherIterator}
+import org.apache.spark.shuffle.IndexShuffleBlockResolver.NOOP_REDUCE_ID
+import org.apache.spark.storage._
 import org.apache.spark.util.CompletionIterator
 import org.apache.spark.util.collection.ExternalSorter
 
@@ -43,21 +50,51 @@ private[spark] class BlockStoreShuffleReader[K, C](
 
   /** Read the combined key-values for this reduce task */
   override def read(): Iterator[Product2[K, C]] = {
-    val wrappedStreams = new ShuffleBlockFetcherIterator(
-      context,
-      blockManager.shuffleClient,
-      blockManager,
-      mapOutputTracker.getMapSizesByExecutorId(handle.shuffleId, startPartition, endPartition),
-      serializerManager.wrapStream,
-      // Note: we use getSizeAsMb when no suffix is provided for backwards compatibility
-      SparkEnv.get.conf.get(config.REDUCER_MAX_SIZE_IN_FLIGHT) * 1024 * 1024,
-      SparkEnv.get.conf.get(config.REDUCER_MAX_REQS_IN_FLIGHT),
-      SparkEnv.get.conf.get(config.REDUCER_MAX_BLOCKS_IN_FLIGHT_PER_ADDRESS),
-      SparkEnv.get.conf.get(config.MAX_REMOTE_BLOCK_SIZE_FETCH_TO_MEM),
-      SparkEnv.get.conf.get(config.SHUFFLE_DETECT_CORRUPT),
-      SparkEnv.get.conf.get(config.SHUFFLE_DETECT_CORRUPT_MEMORY),
-      readMetrics).toCompletionIterator
-
+    val conf = SparkEnv.get.conf
+    val wrappedStreams =
+      if (conf.getBoolean("spark.shuffle.s3.enabled", false)) {
+        logInfo("reading shuffle files from S3")
+        val s3 = AmazonS3ClientBuilder.defaultClient()
+        val bucket = conf.get("spark.shuffle.s3.bucket")
+        val parent = conf.get("spark.shuffle.s3.prefix", ".sparkStaging") +
+          Path.SEPARATOR + conf.get("spark.app.id") + Path.SEPARATOR + "shuffle"
+        mapOutputTracker.
+          getMapSizesByExecutorId(handle.shuffleId, startPartition, endPartition).
+          flatMap(_._2).
+          map({
+            case (blockId@ShuffleBlockId(shuffleId, mapId, reduceId), size) =>
+              val indexKey = parent + Path.SEPARATOR +
+                ShuffleIndexBlockId(shuffleId, mapId, NOOP_REDUCE_ID).name
+              val index = new DataInputStream(s3.getObject(new GetObjectRequest(bucket, indexKey).
+                withRange(reduceId * 8L, reduceId * 8L + 16 - 1)).getObjectContent)
+              val offset = index.readLong()
+              val nextOffset = index.readLong()
+              index.close()
+              val dataKey = parent + Path.SEPARATOR +
+                ShuffleDataBlockId(shuffleId, mapId, NOOP_REDUCE_ID).name
+              val data = s3.getObject(new GetObjectRequest(bucket, dataKey).
+                withRange(offset, nextOffset - 1)).getObjectContent
+              logInfo(s"Fetched $blockId, $offset to $nextOffset " +
+                s"from $dataKey based on $indexKey with estimated size $size")
+              (blockId, serializerManager.wrapStream(blockId, data))
+            case (blockId, _) => throw new IllegalStateException(s"$blockId is not a shuffle block")
+          })
+      } else {
+        new ShuffleBlockFetcherIterator(
+          context,
+          blockManager.shuffleClient,
+          blockManager,
+          mapOutputTracker.getMapSizesByExecutorId(handle.shuffleId, startPartition, endPartition),
+          serializerManager.wrapStream,
+          // Note: we use getSizeAsMb when no suffix is provided for backwards compatibility
+          conf.get(config.REDUCER_MAX_SIZE_IN_FLIGHT) * 1024 * 1024,
+          conf.get(config.REDUCER_MAX_REQS_IN_FLIGHT),
+          conf.get(config.REDUCER_MAX_BLOCKS_IN_FLIGHT_PER_ADDRESS),
+          conf.get(config.MAX_REMOTE_BLOCK_SIZE_FETCH_TO_MEM),
+          conf.get(config.SHUFFLE_DETECT_CORRUPT),
+          conf.get(config.SHUFFLE_DETECT_CORRUPT_MEMORY),
+          readMetrics).toCompletionIterator
+      }
     val serializerInstance = dep.serializer.newInstance()
 
     // Create a key/value iterator for each stream

@@ -40,9 +40,6 @@ import org.xml.sax.InputSource;
  * This is based on Hive's UDFXPathUtil implementation.
  */
 public class UDFXPathUtil {
-  public static final String SAX_FEATURE_PREFIX = "http://xml.org/sax/features/";
-  public static final String EXTERNAL_GENERAL_ENTITIES_FEATURE = "external-general-entities";
-  public static final String EXTERNAL_PARAMETER_ENTITIES_FEATURE = "external-parameter-entities";
   private DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
   private DocumentBuilder builder = null;
   private XPath xpath = XPathFactory.newInstance().newXPath();
@@ -95,8 +92,13 @@ public class UDFXPathUtil {
   }
 
   private void initializeDocumentBuilderFactory() throws ParserConfigurationException {
-    dbf.setFeature(SAX_FEATURE_PREFIX + EXTERNAL_GENERAL_ENTITIES_FEATURE, false);
-    dbf.setFeature(SAX_FEATURE_PREFIX + EXTERNAL_PARAMETER_ENTITIES_FEATURE, false);
+    // cannot fully disable dtd
+    // dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+    dbf.setFeature("http://xml.org/sax/features/external-general-entities", false);
+    dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+    dbf.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+    dbf.setXIncludeAware(false);
+    dbf.setExpandEntityReferences(false);
   }
 
   public Boolean evalBoolean(String xml, String path) throws XPathExpressionException {

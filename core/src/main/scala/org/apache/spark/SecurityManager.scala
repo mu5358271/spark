@@ -18,11 +18,13 @@
 package org.apache.spark
 
 import java.io.File
-import java.net.{Authenticator, PasswordAuthentication}
+import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Files
 import java.util.Base64
 
+import com.amazonaws.services.kms.AWSKMSClientBuilder
+import com.amazonaws.services.kms.model.{DataKeySpec, DecryptRequest, GenerateDataKeyRequest}
 import org.apache.hadoop.io.Text
 import org.apache.hadoop.security.{Credentials, UserGroupInformation}
 
@@ -297,6 +299,7 @@ private[spark] class SecurityManager(
         .orElse(Option(sparkConf.getenv(ENV_AUTH_SECRET)))
         .orElse(sparkConf.getOption(SPARK_AUTH_SECRET_CONF))
         .orElse(secretKeyFromFile())
+        .orElse(secretKeyFromAWSKMS())
         .getOrElse {
           throw new IllegalArgumentException(
             s"A secret key must be specified via the $SPARK_AUTH_SECRET_CONF config")
@@ -333,6 +336,9 @@ private[spark] class SecurityManager(
         // with the way k8s handles propagation of delegation tokens.
         false
 
+      case m if m.startsWith("fargate") =>
+        false
+
       case _ =>
         require(sparkConf.contains(SPARK_AUTH_SECRET_CONF),
           s"A secret key must be specified via the $SPARK_AUTH_SECRET_CONF config.")
@@ -346,12 +352,36 @@ private[spark] class SecurityManager(
           " executors, not only one or the other.")
     }
 
-    secretKey = secretKeyFromFile().getOrElse(Utils.createSecret(sparkConf))
+    secretKey =
+      secretKeyFromFile().
+        orElse(secretKeyFromAWSKMS()).
+        getOrElse(Utils.createSecret(sparkConf))
 
     if (storeInUgi) {
       val creds = new Credentials()
       creds.addSecretKey(SECRET_LOOKUP_KEY, secretKey.getBytes(UTF_8))
       UserGroupInformation.getCurrentUser().addCredentials(creds)
+    }
+  }
+
+  private def secretKeyFromAWSKMS(): Option[String] = {
+    sparkConf.getOption("spark.authenticate.kms.key").map { key =>
+      val kms = AWSKMSClientBuilder.defaultClient()
+      sparkConf.getOption("spark.authenticate.encrypted.secret") match {
+        // Driver side where secret is not initialized
+        case None =>
+          val req = new GenerateDataKeyRequest().withKeyId(key).withKeySpec(DataKeySpec.AES_256)
+          val res = kms.generateDataKey(req)
+          val encoded = Base64.getEncoder.encodeToString(res.getCiphertextBlob.array())
+          sparkConf.set("spark.authenticate.encrypted.secret", encoded)
+          Base64.getEncoder.encodeToString(res.getPlaintext.array())
+        // Executor
+        case Some(secret) =>
+          val decoded = ByteBuffer.wrap(Base64.getDecoder.decode(secret))
+          val req = new DecryptRequest().withCiphertextBlob(decoded)
+          val res = kms.decrypt(req)
+          Base64.getEncoder.encodeToString(res.getPlaintext.array())
+      }
     }
   }
 

@@ -34,8 +34,18 @@
   <url>http://spark.apache.org/</url>
   <dependencies>
     <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-java-sdk-kms</artifactId>
+      <version>${aws.java.sdk.version}</version>
+    </dependency>
+    <dependency>
       <groupId>com.thoughtworks.paranamer</groupId>
       <artifactId>paranamer</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-java-sdk-s3</artifactId>
+      <version>${aws.java.sdk.version}</version>
     </dependency>
     <dependency>
       <groupId>org.apache.avro</groupId>

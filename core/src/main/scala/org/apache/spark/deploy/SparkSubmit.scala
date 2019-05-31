@@ -18,7 +18,7 @@
 package org.apache.spark.deploy
 
 import java.io._
-import java.lang.reflect.{InvocationTargetException, Modifier, UndeclaredThrowableException}
+import java.lang.reflect.{InvocationTargetException, UndeclaredThrowableException}
 import java.net.{URI, URL}
 import java.security.PrivilegedExceptionAction
 import java.text.ParseException
@@ -234,8 +234,9 @@ private[spark] class SparkSubmit extends Logging {
         YARN
       case m if m.startsWith("spark") => STANDALONE
       case m if m.startsWith("mesos") => MESOS
-      case m if m.startsWith("k8s") => KUBERNETES
       case m if m.startsWith("local") => LOCAL
+      case m if m.startsWith("k8s") => KUBERNETES
+      case m if m.startsWith("fargate") => FARGATE
       case _ =>
         error("Master must either be yarn or start with spark, mesos, k8s, or local")
         -1
@@ -313,6 +314,7 @@ private[spark] class SparkSubmit extends Logging {
     val isMesosCluster = clusterManager == MESOS && deployMode == CLUSTER
     val isStandAloneCluster = clusterManager == STANDALONE && deployMode == CLUSTER
     val isKubernetesCluster = clusterManager == KUBERNETES && deployMode == CLUSTER
+    val isFargateCluster = clusterManager == FARGATE && deployMode == CLUSTER
     val isMesosClient = clusterManager == MESOS && deployMode == CLIENT
 
     if (!isMesosCluster && !isStandAloneCluster) {
@@ -550,22 +552,22 @@ private[spark] class SparkSubmit extends Logging {
       OptionAssigner(args.archives, YARN, ALL_DEPLOY_MODES, confKey = "spark.yarn.dist.archives"),
 
       // Other options
-      OptionAssigner(args.numExecutors, YARN | KUBERNETES, ALL_DEPLOY_MODES,
+      OptionAssigner(args.numExecutors, YARN | KUBERNETES | FARGATE, ALL_DEPLOY_MODES,
         confKey = EXECUTOR_INSTANCES.key),
-      OptionAssigner(args.executorCores, STANDALONE | YARN | KUBERNETES, ALL_DEPLOY_MODES,
+      OptionAssigner(args.executorCores, STANDALONE | YARN | KUBERNETES | FARGATE, ALL_DEPLOY_MODES,
         confKey = EXECUTOR_CORES.key),
-      OptionAssigner(args.executorMemory, STANDALONE | MESOS | YARN | KUBERNETES, ALL_DEPLOY_MODES,
-        confKey = EXECUTOR_MEMORY.key),
-      OptionAssigner(args.totalExecutorCores, STANDALONE | MESOS | KUBERNETES, ALL_DEPLOY_MODES,
-        confKey = CORES_MAX.key),
-      OptionAssigner(args.files, LOCAL | STANDALONE | MESOS | KUBERNETES, ALL_DEPLOY_MODES,
-        confKey = FILES.key),
+      OptionAssigner(args.executorMemory, STANDALONE | MESOS | YARN | KUBERNETES | FARGATE,
+        ALL_DEPLOY_MODES, confKey = EXECUTOR_MEMORY.key),
+      OptionAssigner(args.totalExecutorCores, STANDALONE | MESOS | KUBERNETES | FARGATE,
+        ALL_DEPLOY_MODES, confKey = CORES_MAX.key),
+      OptionAssigner(args.files, LOCAL | STANDALONE | MESOS | KUBERNETES | FARGATE,
+        ALL_DEPLOY_MODES, confKey = FILES.key),
       OptionAssigner(args.jars, LOCAL, CLIENT, confKey = JARS.key),
-      OptionAssigner(args.jars, STANDALONE | MESOS | KUBERNETES, ALL_DEPLOY_MODES,
+      OptionAssigner(args.jars, STANDALONE | MESOS | KUBERNETES | FARGATE, ALL_DEPLOY_MODES,
         confKey = JARS.key),
-      OptionAssigner(args.driverMemory, STANDALONE | MESOS | YARN | KUBERNETES, CLUSTER,
+      OptionAssigner(args.driverMemory, STANDALONE | MESOS | YARN | KUBERNETES | FARGATE, CLUSTER,
         confKey = DRIVER_MEMORY.key),
-      OptionAssigner(args.driverCores, STANDALONE | MESOS | YARN | KUBERNETES, CLUSTER,
+      OptionAssigner(args.driverCores, STANDALONE | MESOS | YARN | KUBERNETES | FARGATE, CLUSTER,
         confKey = DRIVER_CORES.key),
       OptionAssigner(args.supervise.toString, STANDALONE | MESOS, CLUSTER,
         confKey = DRIVER_SUPERVISE.key),
@@ -722,6 +724,15 @@ private[spark] class SparkSubmit extends Logging {
         args.childArgs.foreach { arg =>
           childArgs += ("--arg", arg)
         }
+      }
+    }
+
+    if (isFargateCluster) {
+      childMainClass = FARGATE_CLUSTER_SUBMIT_CLASS
+      childArgs += ("--jar", args.primaryResource)
+      childArgs += ("--class", args.mainClass)
+      if (args.childArgs != null) {
+        args.childArgs.foreach { arg => childArgs += ("--arg", arg) }
       }
     }
 
@@ -890,7 +901,8 @@ object SparkSubmit extends CommandLineUtils with Logging {
   private val MESOS = 4
   private val LOCAL = 8
   private val KUBERNETES = 16
-  private val ALL_CLUSTER_MGRS = YARN | STANDALONE | MESOS | LOCAL | KUBERNETES
+  private val FARGATE = 32
+  private val ALL_CLUSTER_MGRS = YARN | STANDALONE | MESOS | LOCAL | KUBERNETES | FARGATE
 
   // Deploy modes
   private val CLIENT = 1
@@ -913,6 +925,9 @@ object SparkSubmit extends CommandLineUtils with Logging {
   private[deploy] val STANDALONE_CLUSTER_SUBMIT_CLASS = classOf[ClientApp].getName()
   private[deploy] val KUBERNETES_CLUSTER_SUBMIT_CLASS =
     "org.apache.spark.deploy.k8s.submit.KubernetesClientApplication"
+  private[deploy] val FARGATE_CLUSTER_SUBMIT_CLASS =
+    "org.apache.spark.deploy.fargate.submit.FargateClusterApplication"
+
 
   override def main(args: Array[String]): Unit = {
     val submit = new SparkSubmit() {

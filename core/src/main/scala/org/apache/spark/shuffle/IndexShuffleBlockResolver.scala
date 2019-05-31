@@ -21,6 +21,9 @@ import java.io._
 import java.nio.channels.Channels
 import java.nio.file.Files
 
+import com.amazonaws.services.s3.AmazonS3ClientBuilder
+import org.apache.hadoop.fs.Path
+
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
 import org.apache.spark.io.NioBufferedFileInputStream
@@ -180,6 +183,19 @@ private[spark] class IndexShuffleBlockResolver(
           }
           if (dataTmp != null && dataTmp.exists() && !dataTmp.renameTo(dataFile)) {
             throw new IOException("fail to rename file " + dataTmp + " to " + dataFile)
+          }
+          // WARNING: This is not fault tolerant or speculation safe.
+          if (conf.getBoolean("spark.shuffle.s3.enabled", false)) {
+            val s3 = AmazonS3ClientBuilder.defaultClient()
+            val bucket = conf.get("spark.shuffle.s3.bucket")
+            val parent = conf.get("spark.shuffle.s3.prefix", ".sparkStaging") +
+              Path.SEPARATOR + conf.get("spark.app.id") + Path.SEPARATOR + "shuffle"
+            val data = parent + Path.SEPARATOR +
+              ShuffleDataBlockId(shuffleId, mapId, NOOP_REDUCE_ID).name
+            s3.putObject(bucket, data, dataFile)
+            val index = parent + Path.SEPARATOR +
+              ShuffleIndexBlockId(shuffleId, mapId, NOOP_REDUCE_ID).name
+            s3.putObject(bucket, index, indexFile)
           }
         }
       }

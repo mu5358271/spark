@@ -99,6 +99,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   @GuardedBy("CoarseGrainedSchedulerBackend.this")
   protected var localityAwareTasks = 0
 
+  protected def useIntegerExecutorId = true
   // The num of current max ExecutorId used to re-register appMaster
   @volatile protected var currentExecutorIdCounter = 0
 
@@ -214,8 +215,10 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           // in this block are read when requesting executors
           CoarseGrainedSchedulerBackend.this.synchronized {
             executorDataMap.put(executorId, data)
-            if (currentExecutorIdCounter < executorId.toInt) {
-              currentExecutorIdCounter = executorId.toInt
+            if (useIntegerExecutorId) {
+              if (currentExecutorIdCounter < executorId.toInt) {
+                currentExecutorIdCounter = executorId.toInt
+              }
             }
             if (numPendingExecutors > 0) {
               numPendingExecutors -= 1
